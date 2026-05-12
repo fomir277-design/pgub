@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from config import BOT_TOKEN, API_ID, API_HASH
+from config import BOT_TOKEN, API_ID, API_HASH, SESSION_STRING
 from storage import Storage
 from handlers import router
 from scheduler import JobManager
@@ -18,21 +18,29 @@ logger = logging.getLogger(__name__)
 async def main():
     storage = Storage()
 
-    # Пул клиентов (user_id -> TelegramClient)
+    # Основной клиент (обязателен)
+    if not SESSION_STRING:
+        raise RuntimeError("SESSION_STRING не задан. Сгенерируйте сессию через session_gen.py")
+    main_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+    await main_client.start()
+    logger.info("Основной клиент запущен")
+
+    # Восстанавливаем привязанные сессии
     clients = {}
     for uid_str in storage.all_users():
         uid = int(uid_str)
-        us = storage.get_user(uid)          # теперь всегда полный словарь
+        us = storage.get_user(uid)
         if us.get("connected") and us.get("session_string"):
             try:
                 client = TelegramClient(StringSession(us["session_string"]), API_ID, API_HASH)
                 await client.start()
                 clients[uid] = client
-                logger.info(f"Восстановлена сессия {uid}")
+                logger.info(f"Сессия {uid} восстановлена")
             except Exception as e:
                 logger.error(f"Ошибка восстановления сессии {uid}: {e}")
 
-    job = JobManager(clients, storage)
+    # Планировщик
+    job = JobManager(main_client, clients, storage)
     await job.restore_all()
 
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
