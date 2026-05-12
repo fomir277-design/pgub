@@ -1,6 +1,5 @@
-import json
-import os
-from typing import Dict, Any, List, Optional
+import json, os
+from typing import Any
 
 DATA_FILE = os.path.join(os.path.dirname(__file__), "pgub_data.json")
 
@@ -12,8 +11,7 @@ DEFAULT_USER = {
     "tcard_interval": 120,
     "daily_enabled": False,
     "farm_hour": None,
-    "farm_minute": None,
-    "farm_task_added": False
+    "farm_minute": None
 }
 
 class Storage:
@@ -51,7 +49,7 @@ class Storage:
     def is_connected(self, user_id: int) -> bool:
         return str(user_id) in self.data["_connected"]
 
-    def get_user(self, user_id: int) -> Dict[str, Any]:
+    def get_user(self, user_id: int):
         return self.data["users"].get(str(user_id), DEFAULT_USER.copy())
 
     def set_user(self, user_id: int, key: str, value: Any):
@@ -69,7 +67,7 @@ class Storage:
     def is_banned(self, user_id: int) -> bool:
         return self.get_role(user_id) == "banned"
 
-    def count_by_roles(self) -> Dict[str, int]:
+    def count_by_roles(self):
         cnt = {"ga": 0, "admin": 0, "player": 0, "banned": 0}
         for u in self.data["users"].values():
             r = u.get("role", "player")
@@ -80,20 +78,20 @@ class Storage:
     def all_users(self):
         return list(self.data["users"].keys())
 
-    # ---------- сессии (мульти-аккаунты) ----------
-    def add_session(self, owner_id: int, session_string: str, game_id: str = ""):
+    # ---------- сессии ----------
+    def add_session(self, owner_id: int, session_string: str):
         self.data["sessions"].append({
             "owner": owner_id,
-            "session": session_string,
-            "game_id": game_id
+            "session": session_string
         })
         self._save()
 
-    def get_sessions(self, owner_id: int = None) -> list:
+    def get_sessions(self, owner_id: int = None):
         if owner_id is not None:
             return [s for s in self.data["sessions"] if s["owner"] == owner_id]
         return self.data["sessions"]
 
-    def delete_session(self, game_id: str):
-        self.data["sessions"] = [s for s in self.data["sessions"] if s.get("game_id") != game_id]
-        self._save()
+    def delete_session(self, index: int):
+        if 0 <= index < len(self.data["sessions"]):
+            self.data["sessions"].pop(index)
+            self._save()

@@ -18,57 +18,48 @@ logger = logging.getLogger(__name__)
 async def main():
     storage = Storage()
 
-    # Загружаем все сессии
-    sessions_data = storage.data.get("sessions", [])
-    clients = []
-    # Главная сессия (обязательна)
+    # Основной Telethon-клиент
     if not SESSION_STRING:
         raise RuntimeError("SESSION_STRING не задан")
-    main_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    await main_client.start()
-    clients.append((main_client, {"owner": 0, "session": SESSION_STRING, "game_id": "main"}))
-    me = await main_client.get_me()
-    self_username = f"@{me.username}" if me.username else None
+    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+    await client.start()
 
-    # Дополнительные сессии из хранилища
-    for idx, s in enumerate(sessions_data):
-        try:
-            cl = TelegramClient(StringSession(s["session"]), API_ID, API_HASH)
-            await cl.start()
-            clients.append((cl, s))
-            logger.info(f"Доп. сессия {idx} запущена")
-        except Exception as e:
-            logger.error(f"Ошибка запуска доп. сессии: {e}")
+    # Менеджер задач
+    job = JobManager(client)
+    # Загружаем сохранённые задачи для всех пользователей
+    for uid in storage.all_users():
+        us = storage.get_user(int(uid))
+        if us["tcard_enabled"]:
+            await job.set_tcard(int(uid), True, us["tcard_interval"])
+        if us["daily_enabled"]:
+            await job.set_daily(int(uid), True)
+    # Глобальная ферма (если задана цель)
+    ga_id = list(__import__("config").GA_IDS)[0]
+    ga_settings = storage.get_user(ga_id)
+    if ga_settings["target"] and ga_settings["amount"] > 0:
+        await job.set_farm(ga_settings["target"], ga_settings["amount"])
 
-    # Глобальные настройки (GA задаёт через команды)
-    global_target = storage.get_user(list(__import__("config").GA_IDS)[0]).get("target")
-    global_amount = storage.get_user(list(__import__("config").GA_IDS)[0]).get("amount", 0)
-
-    job_manager = JobManager(clients, storage, global_target, global_amount)
-
-    # Aiogram Bot
+    # Aiogram
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     bot.storage = storage
-    bot.scheduler = job_manager
+    bot.scheduler = job
     bot.start_time = time.time()
-    bot.clients = clients  # для использования в handlers
 
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(router)
 
-    # business_connection
     @dp.business_connection()
-    async def on_business_connection(conn):
-        user_id = conn.user.id
+    async def on_bc(conn):
+        uid = conn.user.id
         if conn.is_enabled:
-            storage.register_if_absent(user_id)
-            storage.set_connection(user_id, conn.id)
-            logger.info(f"Business connection enabled for user {user_id}")
+            storage.register_if_absent(uid)
+            storage.set_connection(uid, conn.id)
+            logger.info(f"BC enabled {uid}")
         else:
-            storage.remove_connection(user_id)
-            logger.info(f"Business connection disabled for user {user_id}")
+            storage.remove_connection(uid)
+            logger.info(f"BC disabled {uid}")
 
-    await bot.set_my_commands([BotCommand(command="start", description="Начало работы")])
+    await bot.set_my_commands([BotCommand(command="start", description="Начало")])
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

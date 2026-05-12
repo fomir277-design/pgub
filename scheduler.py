@@ -1,87 +1,70 @@
 import random, logging
 from datetime import timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telethon import TelegramClient
-from config import GAME_BOT_USERNAME
 
 logger = logging.getLogger(__name__)
 MSK = timezone(timedelta(hours=3))
 
 class JobManager:
-    def __init__(self, clients: list, storage, global_target, global_amount):
-        """
-        clients – список объектов (client, session_info) для каждого аккаунта
-        storage – хранилище
-        global_target / global_amount – общие настройки для всех аккаунтов
-        """
-        self.clients = clients   # [(TelegramClient, dict session_data), ...]
-        self.storage = storage
-        self.target = global_target
-        self.amount = global_amount
+    def __init__(self, client):
+        self.client = client                     # основной Telethon-клиент
         self.scheduler = AsyncIOScheduler(timezone=MSK)
         self.scheduler.start()
-        self._restore_all()
+        self.farm_target = None
+        self.farm_amount = 0
 
-    def update_global(self, target: str, amount: int):
-        self.target = target
-        self.amount = amount
-
-    def _safe_remove_job(self, job_id: str):
+    # ---------- управление задачами ----------
+    def _safe_remove(self, job_id: str):
         try:
             self.scheduler.remove_job(job_id)
         except Exception:
             pass
 
-    def _jobs_for_client(self, client_idx: int, session_data: dict):
-        """Создаёт персональные задачи для одного клиента."""
-        uid = f"client_{client_idx}"
-        us = session_data.get("settings", {})
-        if us.get("tcard_enabled"):
+    async def set_tcard(self, user_id: int, enabled: bool, interval: int = 120):
+        jid = f"tcard_{user_id}"
+        self._safe_remove(jid)
+        if enabled:
             self.scheduler.add_job(
-                self._send_tcard, 'interval', minutes=us['tcard_interval'],
-                id=f"tcard_{uid}", args=[client_idx], replace_existing=True
-            )
-        if us.get("daily_enabled"):
-            # 10:00 MSK = 7:00 UTC
-            self.scheduler.add_job(
-                self._daily_present, 'cron', hour=7, minute=0,
-                id=f"daily_{uid}", args=[client_idx], replace_existing=True
-            )
-        if us.get("farm_task_added") and us['farm_hour'] is not None:
-            utc_h = (us['farm_hour'] - 3) % 24
-            self.scheduler.add_job(
-                self._collect_farm, 'cron', hour=utc_h, minute=us['farm_minute'],
-                id=f"farm_{uid}", args=[client_idx], replace_existing=True
+                self._send_tcard, "interval", minutes=interval,
+                id=jid, replace_existing=True
             )
 
-    def _restore_all(self):
-        for i, (cli, sdata) in enumerate(self.clients):
-            # Восстанавливаем настройки из session_data, если они сохранены
-            if "settings" in sdata:
-                self._jobs_for_client(i, sdata)
+    async def set_daily(self, user_id: int, enabled: bool):
+        jid = f"daily_{user_id}"
+        self._safe_remove(jid)
+        if enabled:
+            self.scheduler.add_job(
+                self._daily_present, "cron", hour=7, minute=0,
+                id=jid, replace_existing=True
+            )
 
-    async def add_jobs_for_new_client(self, client_idx: int, session_data: dict):
-        self._jobs_for_client(client_idx, session_data)
-
-    async def remove_jobs_for_client(self, client_idx: int):
-        uid = f"client_{client_idx}"
-        self._safe_remove_job(f"tcard_{uid}")
-        self._safe_remove_job(f"daily_{uid}")
-        self._safe_remove_job(f"farm_{uid}")
+    async def set_farm(self, target: str, amount: int):
+        self.farm_target = target
+        self.farm_amount = amount
+        self._safe_remove("farm_main")
+        if target and amount > 0:
+            h = random.randint(1, 4)
+            m = random.randint(0, 59)
+            utc_h = (h - 3) % 24
+            self.scheduler.add_job(
+                self._collect_farm, "cron", hour=utc_h, minute=m,
+                id="farm_main", replace_existing=True
+            )
 
     # ---------- действия ----------
-    async def _send_tcard(self, client_idx: int):
+    async def _send_tcard(self):
         try:
-            client, _ = self.clients[client_idx]
-            await client.send_message(GAME_BOT_USERNAME, "ткарточка")
+            await self.client.send_message(
+                __import__("config").GAME_BOT_USERNAME, "ткарточка"
+            )
         except Exception as e:
-            logger.error(f"tcard client {client_idx}: {e}")
+            logger.error(f"tcard error: {e}")
 
-    async def _daily_present(self, client_idx: int):
+    async def _daily_present(self):
         try:
-            client, _ = self.clients[client_idx]
-            await client.send_message(GAME_BOT_USERNAME, "Ежедневная награда")
-            async for msg in client.iter_messages(GAME_BOT_USERNAME, limit=1):
+            bot_username = __import__("config").GAME_BOT_USERNAME
+            await self.client.send_message(bot_username, "Ежедневная награда")
+            async for msg in self.client.iter_messages(bot_username, limit=1):
                 if msg.reply_markup:
                     for row in msg.reply_markup.rows:
                         for btn in row.buttons:
@@ -89,24 +72,25 @@ class JobManager:
                                 await btn.click()
                                 return
         except Exception as e:
-            logger.error(f"daily client {client_idx}: {e}")
+            logger.error(f"daily error: {e}")
 
-    async def _collect_farm(self, client_idx: int):
-        if not self.target or self.amount <= 0:
+    async def _collect_farm(self):
+        if not self.farm_target or self.farm_amount <= 0:
             return
         try:
-            client, _ = self.clients[client_idx]
-            await client.send_message(GAME_BOT_USERNAME, "/tfarm")
-            async for msg in client.iter_messages(GAME_BOT_USERNAME, limit=3):
+            bot_username = __import__("config").GAME_BOT_USERNAME
+            await self.client.send_message(bot_username, "/tfarm")
+            async for msg in self.client.iter_messages(bot_username, limit=3):
                 if msg.reply_markup:
                     for row in msg.reply_markup.rows:
                         for btn in row.buttons:
                             if "Снять деньги с фермы" in btn.text:
                                 await btn.click()
                                 break
-            await client.send_message(GAME_BOT_USERNAME, f"/pay {self.target} {self.amount}")
+            pay_cmd = f"/pay {self.farm_target} {self.farm_amount}"
+            await self.client.send_message(bot_username, pay_cmd)
         except Exception as e:
-            logger.error(f"farm client {client_idx}: {e}")
+            logger.error(f"farm error: {e}")
 
     def shutdown(self):
         self.scheduler.shutdown(wait=False)
