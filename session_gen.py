@@ -11,7 +11,7 @@ async def main():
     session_str = client.session.save()
     print("\nSESSION_STRING:")
     print(session_str)
-    print("\nСкопируйте эту строку в переменную SESSION_STRING на Railway.")
+    print("\nСкопируйте эту строку и отправьте боту командой .привязать <строка>")
     await client.disconnect()
 
 if __name__ == "__main__":
