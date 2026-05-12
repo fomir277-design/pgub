@@ -18,14 +18,19 @@ logger = logging.getLogger(__name__)
 async def main():
     storage = Storage()
 
-    # Основной клиент (обязателен)
-    if not SESSION_STRING:
-        raise RuntimeError("SESSION_STRING не задан. Сгенерируйте сессию через session_gen.py")
-    main_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    await main_client.start()
-    logger.info("Основной клиент запущен")
+    # Основной клиент (необязательный)
+    main_client = None
+    if SESSION_STRING:
+        try:
+            main_client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
+            await main_client.start()
+            logger.info("Основной клиент запущен")
+        except Exception as e:
+            logger.error(f"Не удалось запустить основной клиент: {e}")
+    else:
+        logger.warning("SESSION_STRING не задан. Ткарточка и ежедневная награда будут недоступны.")
 
-    # Восстанавливаем привязанные сессии
+    # Привязанные клиенты
     clients = {}
     for uid_str in storage.all_users():
         uid = int(uid_str)
@@ -39,7 +44,7 @@ async def main():
             except Exception as e:
                 logger.error(f"Ошибка восстановления сессии {uid}: {e}")
 
-    # Планировщик
+    # Планировщик (если нет основного клиента, передадим None)
     job = JobManager(main_client, clients, storage)
     await job.restore_all()
 
