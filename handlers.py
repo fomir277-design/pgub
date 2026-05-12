@@ -24,7 +24,7 @@ def role_check(role: str, required: str) -> bool:
     return hierarchy.get(role, 0) >= hierarchy.get(required, 0)
 
 async def _reply(message: types.Message, text: str):
-    await message.answer(text)
+    await message.answer(text, parse_mode=None)
 
 # -------------------------------
 # Общие команды (доступны игроку)
@@ -66,7 +66,6 @@ async def toggle_tcard(message: types.Message):
     action = parts[1].lower()
     user_id = message.from_user.id
     storage: Storage = message.bot.storage
-    scheduler = message.bot.scheduler
 
     if action in ("вкл", "on"):
         interval = 120
@@ -79,9 +78,6 @@ async def toggle_tcard(message: types.Message):
                 return
         storage.set_user(user_id, "tcard_enabled", True)
         storage.set_user(user_id, "tcard_interval", interval)
-        # Для простоты задачи ткарточки персональные для каждого пользователя больше не нужны (мы работаем через глобальные сессии),
-        # но оставим заглушку совместимости: можно запланировать на глобальном клиенте? Нет, теперь управление сессиями централизовано.
-        # Вместо этого просто сохраним настройки, они будут подхвачены при следующем создании задач.
         await _reply(message, f"🃏 Ткарточка включена (каждые {interval} мин).")
     elif action in ("выкл", "off"):
         storage.set_user(user_id, "tcard_enabled", False)
@@ -267,7 +263,6 @@ async def ga_amount(message: types.Message):
 
 # Авторизация нового аккаунта
 class AuthSession:
-    """Простая обёртка для временного хранения данных FSM."""
     def __init__(self):
         self.client = None
         self.phone = None
@@ -308,7 +303,6 @@ async def auth_code(message: types.Message, state: FSMContext):
     try:
         await auth.client.sign_in(phone=auth.phone, code=message.text.strip())
     except Exception as e:
-        # возможно, нужна 2FA
         if "password" in str(e).lower():
             await state.set_state(AuthStates.waiting_2fa)
             return await _reply(message, "🔐 Введите пароль двухфакторной аутентификации:")
@@ -319,11 +313,9 @@ async def auth_code(message: types.Message, state: FSMContext):
     session_str = auth.client.session.save()
     storage: Storage = message.bot.storage
     storage.add_session(owner_id=user_id, session_string=session_str)
-    # запускаем клиента и добавляем в глобальный список
     new_client = TelegramClient(StringSession(session_str), API_ID, API_HASH)
     await new_client.start()
     message.bot.clients.append((new_client, {"owner": user_id, "session": session_str, "game_id": ""}))
-    # добавим задачи для нового клиента
     await message.bot.scheduler.add_jobs_for_new_client(len(message.bot.clients)-1, {"settings": {}})
     await _reply(message, "✅ Новый аккаунт добавлен и готов к работе.")
     await state.clear()
@@ -348,7 +340,6 @@ async def auth_2fa(message: types.Message, state: FSMContext):
     await _reply(message, "✅ Аккаунт с 2FA успешно добавлен.")
     await state.clear()
 
-# Привязать IDTG к сессии
 @router.message(lambda msg: msg.text and msg.text.lower().startswith(".привязать "))
 async def bind_session(message: types.Message):
     user_id = message.from_user.id
@@ -370,7 +361,6 @@ async def bind_session(message: types.Message):
     storage._save()
     await _reply(message, f"🔗 Сессия {session_index} привязана к IDTG {game_id}.")
 
-# Список сессий
 @router.message(lambda msg: msg.text and msg.text.lower() == ".сессии")
 async def list_sessions(message: types.Message):
     user_id = message.from_user.id
@@ -386,7 +376,6 @@ async def list_sessions(message: types.Message):
     text += f"Всего: {len(sessions)}"
     await _reply(message, text)
 
-# Удалить сессию
 @router.message(lambda msg: msg.text and msg.text.lower().startswith(".удалитьсессию "))
 async def delete_session(message: types.Message):
     user_id = message.from_user.id
@@ -397,7 +386,6 @@ async def delete_session(message: types.Message):
     if len(parts) < 2:
         return await _reply(message, "❌ Укажите IDTG или индекс")
     ident = parts[1]
-    # ищем сессию по game_id или по индексу
     sessions = storage.get_sessions(owner_id=user_id)
     deleted = False
     if ident.isdigit():
@@ -405,7 +393,6 @@ async def delete_session(message: types.Message):
         if 0 <= idx < len(sessions):
             game_id = sessions[idx].get("game_id")
             storage.delete_session(game_id)
-            # останавливаем клиент и удаляем задачи
             for i, (cli, sdata) in enumerate(message.bot.clients):
                 if sdata.get("game_id") == game_id and cli is not None:
                     await cli.disconnect()
@@ -415,7 +402,6 @@ async def delete_session(message: types.Message):
             await _reply(message, f"🗑 Сессия {idx} удалена.")
             deleted = True
     else:
-        # удаляем по game_id
         storage.delete_session(ident)
         for i, (cli, sdata) in enumerate(message.bot.clients):
             if sdata.get("game_id") == ident:
