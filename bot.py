@@ -7,7 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand
 from aiogram.fsm.storage.memory import MemoryStorage
 
-from config import BOT_TOKEN, API_ID, API_HASH, SESSION_STRING
+from config import BOT_TOKEN, API_ID, API_HASH
 from storage import Storage
 from handlers import router
 from scheduler import JobManager
@@ -18,31 +18,27 @@ logger = logging.getLogger(__name__)
 async def main():
     storage = Storage()
 
-    # Основной Telethon-клиент
-    if not SESSION_STRING:
-        raise RuntimeError("SESSION_STRING не задан")
-    client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
-    await client.start()
+    # Пул клиентов (user_id -> TelegramClient)
+    clients = {}
+    for uid_str in storage.all_users():
+        uid = int(uid_str)
+        us = storage.get_user(uid)
+        if us["connected"] and us["session_string"]:
+            try:
+                client = TelegramClient(StringSession(us["session_string"]), API_ID, API_HASH)
+                await client.start()
+                clients[uid] = client
+                logger.info(f"Восстановлена сессия {uid}")
+            except Exception as e:
+                logger.error(f"Ошибка восстановления сессии {uid}: {e}")
 
-    # Менеджер задач
-    job = JobManager(client)
-    # Загружаем сохранённые задачи для всех пользователей
-    for uid in storage.all_users():
-        us = storage.get_user(int(uid))
-        if us["tcard_enabled"]:
-            await job.set_tcard(int(uid), True, us["tcard_interval"])
-        if us["daily_enabled"]:
-            await job.set_daily(int(uid), True)
-    # Глобальная ферма (если задана цель)
-    ga_id = list(__import__("config").GA_IDS)[0]
-    ga_settings = storage.get_user(ga_id)
-    if ga_settings["target"] and ga_settings["amount"] > 0:
-        await job.set_farm(ga_settings["target"], ga_settings["amount"])
+    job = JobManager(clients, storage)
+    await job.restore_all()
 
-    # Aiogram
     bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     bot.storage = storage
     bot.scheduler = job
+    bot.clients = clients
     bot.start_time = time.time()
 
     dp = Dispatcher(storage=MemoryStorage())
@@ -59,7 +55,7 @@ async def main():
             storage.remove_connection(uid)
             logger.info(f"BC disabled {uid}")
 
-    await bot.set_my_commands([BotCommand(command="start", description="Начало")])
+    await bot.set_my_commands([BotCommand(command="start", description="Начало работы")])
     await dp.start_polling(bot)
 
 if __name__ == "__main__":

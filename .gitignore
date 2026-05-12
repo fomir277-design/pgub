@@ -1,5 +1,4 @@
 __pycache__/
 *.pyc
 .env
-pgub_data.json
-pgub_session.session
+data/
