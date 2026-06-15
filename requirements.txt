@@ -1,0 +1,11 @@
+apscheduler
+pyaes
+pyrogram
+pysocks
+python-dotenv
+pytz
+tgcrypto
+tzdata
+tzlocal
+psutil
+aiohttp
