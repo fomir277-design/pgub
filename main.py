@@ -5,7 +5,27 @@ import asyncio
 import random
 import time
 import logging
-import psutil
+# Заглушка вместо оригинального psutil для работы на Termux
+class PsutilMock:
+    def cpu_percent(self, *args, **kwargs): 
+        return 0.0
+    
+    def virtual_memory(self):
+        class VM:
+            percent = 0.0
+            total = 4 * 1024 * 1024 * 1024  # Имитация 4 ГБ
+            used = 0
+            available = total
+        return VM()
+
+    def Process(self, *args, **kwargs):
+        class Proc:
+            def memory_info(self):
+                class Mem: rss = 0
+                return Mem()
+        return Proc()
+
+psutil = PsutilMock()
 import sqlite3
 import subprocess
 import builtins
